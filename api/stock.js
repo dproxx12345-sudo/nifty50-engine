@@ -5,37 +5,16 @@ export default async function handler(req, res) {
   const { ticker } = req.query;
   if (!ticker) return res.status(400).json({ error: "Missing ticker" });
 
-  let currentPrice = null, prevClose = null;
-
-  // 1. Google Finance for current price (always correct post-split)
-  try {
-    const r = await fetch(`https://www.google.com/finance/quote/${encodeURIComponent(ticker)}:NSE`, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
-    });
-    if (r.ok) {
-      const html = await r.text();
-      const pm = html.match(/data-last-price="([^"]+)"/);
-      if (pm) currentPrice = parseFloat(pm[1]);
-      const pcm = html.match(/data-previous-close="([^"]+)"/);
-      if (pcm) prevClose = parseFloat(pcm[1]);
-      if (!prevClose) {
-        const pcm2 = html.match(/Previous close[\s\S]*?>([\d,]+\.\d+)/);
-        if (pcm2) prevClose = parseFloat(pcm2[1].replace(/,/g, ""));
-      }
-    }
-  } catch {}
-
-  // 2. Yahoo Finance for historical OHLCV (adjusted close for features)
-  let history = [];
+  const yfTicker = `${ticker}.NS`;
   const end = Math.floor(Date.now() / 1000);
   const start = end - 86400 * 200;
-  const yfTicker = `${ticker}.NS`;
 
   for (const host of ["query1", "query2"]) {
     try {
-      const r = await fetch(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yfTicker)}?period1=${start}&period2=${end}&interval=1d&includeAdjustedClose=true`, {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-      });
+      const r = await fetch(
+        `https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yfTicker)}?period1=${start}&period2=${end}&interval=1d&includeAdjustedClose=true`,
+        { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" } }
+      );
       if (!r.ok) continue;
       const j = await r.json();
       const result = j?.chart?.result?.[0];
@@ -44,10 +23,19 @@ export default async function handler(req, res) {
       const adj = result.indicators?.adjclose?.[0]?.adjclose;
       if (!q) continue;
       const meta = result.meta || {};
-      if (!currentPrice) currentPrice = meta.regularMarketPrice;
-      if (!prevClose) prevClose = meta.previousClose;
 
-      history = result.timestamp.map((ts, i) => {
+      // meta.regularMarketPrice and meta.previousClose are ALWAYS correct
+      // They reflect current post-split prices
+      const currentPrice = meta.regularMarketPrice;
+      const prevClose = meta.previousClose || meta.chartPreviousClose;
+      const dayChangePct = (currentPrice && prevClose && prevClose > 0)
+        ? Math.round(((currentPrice - prevClose) / prevClose) * 10000) / 100
+        : null;
+
+      // History: use adjusted close for feature computation
+      // These may look different from actual prices for split stocks
+      // but RSI/MACD/momentum features work correctly on adjusted data
+      const history = result.timestamp.map((ts, i) => {
         const c = adj?.[i] ?? q.close?.[i];
         const o = q.open?.[i];
         if (!c || !o || c <= 0) return null;
@@ -60,12 +48,12 @@ export default async function handler(req, res) {
           v: q.volume?.[i] || 0,
         };
       }).filter(Boolean);
-      break;
+
+      return res.status(200).json({
+        ticker, currentPrice, prevClose, dayChangePct,
+        count: history.length, data: history,
+      });
     } catch { continue; }
   }
-
-  const dayChangePct = (currentPrice && prevClose && prevClose > 0)
-    ? Math.round(((currentPrice - prevClose) / prevClose) * 10000) / 100 : null;
-
-  return res.status(200).json({ ticker, currentPrice, prevClose, dayChangePct, count: history.length, data: history });
+  return res.status(502).json({ error: `Failed for ${ticker}` });
 }
