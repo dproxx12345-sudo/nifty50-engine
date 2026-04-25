@@ -86,11 +86,11 @@ async function fetchViaProxy(ticker) {
       const r = await fetch(`${base}/api/stock?ticker=${ticker}`);
       if (r.ok) {
         const j = await r.json();
-        if (j.data && j.data.length > 0) return j.data;
+        if (j.data && j.data.length > 0) return { data: j.data, livePrice: j.regularMarketPrice, prevClose: j.previousClose };
       }
     } catch {}
   }
-  // Fallback: direct Yahoo Finance (works if no CORS or from server)
+  // Fallback: direct Yahoo Finance
   try {
     const end = Math.floor(Date.now() / 1000);
     const start = end - 86400 * 150;
@@ -100,11 +100,13 @@ async function fetchViaProxy(ticker) {
       const res = j?.chart?.result?.[0];
       if (res?.timestamp) {
         const q = res.indicators?.quote?.[0];
-        return res.timestamp.map((ts, i) => ({
+        const meta = res.meta || {};
+        const data = res.timestamp.map((ts, i) => ({
           d: new Date(ts * 1000).toISOString().slice(0, 10),
           o: q.open?.[i], h: q.high?.[i], l: q.low?.[i],
           c: q.close?.[i], v: q.volume?.[i],
         })).filter(x => x.c > 0 && x.o > 0);
+        return { data, livePrice: meta.regularMarketPrice, prevClose: meta.previousClose };
       }
     }
   } catch {}
@@ -120,7 +122,9 @@ async function fetchBatchViaProxy(tickers) {
         const j = await r.json();
         if (j.results) {
           const map = {};
-          j.results.forEach(r => { if (r.data?.length > 0) map[r.ticker] = r.data; });
+          j.results.forEach(r => {
+            if (r.data?.length > 0) map[r.ticker] = { data: r.data, livePrice: r.regularMarketPrice, prevClose: r.previousClose };
+          });
           return map;
         }
       }
@@ -342,23 +346,33 @@ export default function App() {
       for (let idx = 0; idx < NIFTY50.length; idx++) {
         const stk = NIFTY50[idx];
         setProgress({ i: idx + 1, n: NIFTY50.length, status: `Processing ${stk.t}` });
-        let hist = batchData[stk.t] || null;
-        if (!hist || hist.length < 60) hist = genDemoHistory();
+        const stockData = batchData[stk.t] || null;
+        let hist = stockData?.data || null;
+        let livePrice = stockData?.livePrice || null;
+        let prevClose = stockData?.prevClose || null;
+        if (!hist || hist.length < 60) { hist = genDemoHistory(); livePrice = null; }
         const feat = computeFeatures(hist);
         const pred = predict(feat);
-        results.push({ ...stk, ...pred, feat, price: hist[hist.length - 1].c, chg: feat ? feat._todayRet : 0, rc: hist.slice(-30).map(d => d.c), hist });
+        const displayPrice = livePrice || hist[hist.length - 1].c;
+        const todayChg = prevClose ? ((displayPrice - prevClose) / prevClose) * 100 : (feat ? feat._todayRet : 0);
+        results.push({ ...stk, ...pred, feat, price: displayPrice, chg: todayChg, rc: hist.slice(-30).map(d => d.c), hist });
       }
     } else {
       // Fallback: fetch one by one
       for (let idx = 0; idx < NIFTY50.length; idx++) {
         const stk = NIFTY50[idx];
         setProgress({ i: idx + 1, n: NIFTY50.length, status: `Fetching ${stk.t}` });
-        let hist = await fetchViaProxy(stk.t);
+        const stockData = await fetchViaProxy(stk.t);
+        let hist = stockData?.data || null;
+        let livePrice = stockData?.livePrice || null;
+        let prevClose = stockData?.prevClose || null;
         if (hist && hist.length >= 60) { if (source === "demo") source = "live"; }
-        else hist = genDemoHistory();
+        else { hist = genDemoHistory(); livePrice = null; }
         const feat = computeFeatures(hist);
         const pred = predict(feat);
-        results.push({ ...stk, ...pred, feat, price: hist[hist.length - 1].c, chg: feat ? feat._todayRet : 0, rc: hist.slice(-30).map(d => d.c), hist });
+        const displayPrice = livePrice || hist[hist.length - 1].c;
+        const todayChg = prevClose ? ((displayPrice - prevClose) / prevClose) * 100 : (feat ? feat._todayRet : 0);
+        results.push({ ...stk, ...pred, feat, price: displayPrice, chg: todayChg, rc: hist.slice(-30).map(d => d.c), hist });
       }
     }
 
