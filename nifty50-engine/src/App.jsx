@@ -86,30 +86,10 @@ async function fetchViaProxy(ticker) {
       const r = await fetch(`${base}/api/stock?ticker=${ticker}`);
       if (r.ok) {
         const j = await r.json();
-        if (j.data && j.data.length > 0) return { data: j.data, livePrice: j.regularMarketPrice, prevClose: j.previousClose };
+        if (j.data && j.data.length > 0) return { data: j.data, livePrice: j.currentPrice, dayChangePct: j.dayChangePct };
       }
     } catch {}
   }
-  // Fallback: direct Yahoo Finance
-  try {
-    const end = Math.floor(Date.now() / 1000);
-    const start = end - 86400 * 150;
-    const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}.NS?period1=${start}&period2=${end}&interval=1d`);
-    if (r.ok) {
-      const j = await r.json();
-      const res = j?.chart?.result?.[0];
-      if (res?.timestamp) {
-        const q = res.indicators?.quote?.[0];
-        const meta = res.meta || {};
-        const data = res.timestamp.map((ts, i) => ({
-          d: new Date(ts * 1000).toISOString().slice(0, 10),
-          o: q.open?.[i], h: q.high?.[i], l: q.low?.[i],
-          c: q.close?.[i], v: q.volume?.[i],
-        })).filter(x => x.c > 0 && x.o > 0);
-        return { data, livePrice: meta.regularMarketPrice, prevClose: meta.previousClose };
-      }
-    }
-  } catch {}
   return null;
 }
 
@@ -123,7 +103,7 @@ async function fetchBatchViaProxy(tickers) {
         if (j.results) {
           const map = {};
           j.results.forEach(r => {
-            if (r.data?.length > 0) map[r.ticker] = { data: r.data, livePrice: r.regularMarketPrice, prevClose: r.previousClose };
+            if (r.data?.length > 0) map[r.ticker] = { data: r.data, livePrice: r.currentPrice, dayChangePct: r.dayChangePct };
           });
           return map;
         }
@@ -349,17 +329,12 @@ export default function App() {
         const stockData = batchData[stk.t] || null;
         let hist = stockData?.data || null;
         const livePrice = stockData?.livePrice;
-        const metaPrevClose = stockData?.prevClose;
+        const apiChg = stockData?.dayChangePct;
         if (!hist || hist.length < 60) { hist = genDemoHistory(); }
         const feat = computeFeatures(hist);
         const pred = predict(feat);
-        // Use regularMarketPrice (real-time, split-adjusted) for display
-        // Fall back to last adjusted close from history
         const displayPrice = livePrice || hist[hist.length - 1].c;
-        // Today's change: regularMarketPrice vs previousClose from Yahoo meta
-        const todayChg = (livePrice && metaPrevClose && metaPrevClose > 0)
-          ? ((livePrice - metaPrevClose) / metaPrevClose) * 100
-          : (feat ? feat._todayRet : 0);
+        const todayChg = apiChg ?? (feat ? feat._todayRet : 0);
         results.push({ ...stk, ...pred, feat, price: displayPrice, chg: todayChg, rc: hist.slice(-30).map(d => d.c), hist });
       }
     } else {
@@ -370,15 +345,13 @@ export default function App() {
         const stockData = await fetchViaProxy(stk.t);
         let hist = stockData?.data || null;
         const livePrice = stockData?.livePrice;
-        const metaPrevClose = stockData?.prevClose;
+        const apiChg = stockData?.dayChangePct;
         if (hist && hist.length >= 60) { if (source === "demo") source = "live"; }
         else { hist = genDemoHistory(); }
         const feat = computeFeatures(hist);
         const pred = predict(feat);
         const displayPrice = livePrice || hist[hist.length - 1].c;
-        const todayChg = (livePrice && metaPrevClose && metaPrevClose > 0)
-          ? ((livePrice - metaPrevClose) / metaPrevClose) * 100
-          : (feat ? feat._todayRet : 0);
+        const todayChg = apiChg ?? (feat ? feat._todayRet : 0);
         results.push({ ...stk, ...pred, feat, price: displayPrice, chg: todayChg, rc: hist.slice(-30).map(d => d.c), hist });
       }
     }
