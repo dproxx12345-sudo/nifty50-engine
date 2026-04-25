@@ -25,20 +25,24 @@ export default async function handler(req, res) {
       if (!result?.timestamp) continue;
 
       const q = result.indicators?.quote?.[0];
-      const adj = result.indicators?.adjclose?.[0]?.adjclose;
+      const adjArr = result.indicators?.adjclose?.[0]?.adjclose;
       if (!q) continue;
 
       const meta = result.meta || {};
       const ohlcv = result.timestamp.map((ts, i) => {
-        const c = adj?.[i] ?? q.close?.[i];
+        const rawClose = q.close?.[i];
+        const adjClose = adjArr?.[i] ?? rawClose;
         const o = q.open?.[i];
-        if (!c || !o || c <= 0) return null;
+        if (!rawClose || !o || rawClose <= 0) return null;
+        // Use adjusted close for historical series (handles splits correctly)
+        // Compute adjustment ratio to also adjust O/H/L
+        const ratio = adjClose && rawClose ? adjClose / rawClose : 1;
         return {
           d: new Date(ts * 1000).toISOString().slice(0, 10),
-          o: Math.round(o * 100) / 100,
-          h: Math.round((q.high?.[i] || o) * 100) / 100,
-          l: Math.round((q.low?.[i] || o) * 100) / 100,
-          c: Math.round(c * 100) / 100,
+          o: Math.round(o * ratio * 100) / 100,
+          h: Math.round((q.high?.[i] || o) * ratio * 100) / 100,
+          l: Math.round((q.low?.[i] || o) * ratio * 100) / 100,
+          c: Math.round(adjClose * 100) / 100,
           v: q.volume?.[i] || 0,
         };
       }).filter(Boolean);

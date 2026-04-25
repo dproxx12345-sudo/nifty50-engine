@@ -348,13 +348,18 @@ export default function App() {
         setProgress({ i: idx + 1, n: NIFTY50.length, status: `Processing ${stk.t}` });
         const stockData = batchData[stk.t] || null;
         let hist = stockData?.data || null;
-        let livePrice = stockData?.livePrice || null;
-        let prevClose = stockData?.prevClose || null;
-        if (!hist || hist.length < 60) { hist = genDemoHistory(); livePrice = null; }
+        const livePrice = stockData?.livePrice;
+        const metaPrevClose = stockData?.prevClose;
+        if (!hist || hist.length < 60) { hist = genDemoHistory(); }
         const feat = computeFeatures(hist);
         const pred = predict(feat);
+        // Use regularMarketPrice (real-time, split-adjusted) for display
+        // Fall back to last adjusted close from history
         const displayPrice = livePrice || hist[hist.length - 1].c;
-        const todayChg = prevClose ? ((displayPrice - prevClose) / prevClose) * 100 : (feat ? feat._todayRet : 0);
+        // Today's change: regularMarketPrice vs previousClose from Yahoo meta
+        const todayChg = (livePrice && metaPrevClose && metaPrevClose > 0)
+          ? ((livePrice - metaPrevClose) / metaPrevClose) * 100
+          : (feat ? feat._todayRet : 0);
         results.push({ ...stk, ...pred, feat, price: displayPrice, chg: todayChg, rc: hist.slice(-30).map(d => d.c), hist });
       }
     } else {
@@ -364,14 +369,16 @@ export default function App() {
         setProgress({ i: idx + 1, n: NIFTY50.length, status: `Fetching ${stk.t}` });
         const stockData = await fetchViaProxy(stk.t);
         let hist = stockData?.data || null;
-        let livePrice = stockData?.livePrice || null;
-        let prevClose = stockData?.prevClose || null;
+        const livePrice = stockData?.livePrice;
+        const metaPrevClose = stockData?.prevClose;
         if (hist && hist.length >= 60) { if (source === "demo") source = "live"; }
-        else { hist = genDemoHistory(); livePrice = null; }
+        else { hist = genDemoHistory(); }
         const feat = computeFeatures(hist);
         const pred = predict(feat);
         const displayPrice = livePrice || hist[hist.length - 1].c;
-        const todayChg = prevClose ? ((displayPrice - prevClose) / prevClose) * 100 : (feat ? feat._todayRet : 0);
+        const todayChg = (livePrice && metaPrevClose && metaPrevClose > 0)
+          ? ((livePrice - metaPrevClose) / metaPrevClose) * 100
+          : (feat ? feat._todayRet : 0);
         results.push({ ...stk, ...pred, feat, price: displayPrice, chg: todayChg, rc: hist.slice(-30).map(d => d.c), hist });
       }
     }
