@@ -103,7 +103,9 @@ async function fetchBatchViaProxy(tickers) {
         if (j.results) {
           const map = {};
           j.results.forEach(r => {
-            if (r.data?.length > 0) map[r.ticker] = { data: r.data, livePrice: r.currentPrice, dayChangePct: r.dayChangePct };
+            if (r.currentPrice || (r.data && r.data.length > 0)) {
+              map[r.ticker] = { data: r.data || [], livePrice: r.currentPrice, dayChangePct: r.dayChangePct };
+            }
           });
           return map;
         }
